@@ -1,6 +1,8 @@
 ---
 title: "Rising Temperatures in May"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
 ### Background
@@ -22,7 +24,7 @@ temp <- c(80, 69, 66, 75, 77, 69, 68, 75, 91, 70, 80, 75, 69, 71, 50, 75, 64, 74
 (x <- tibble(temp = rev(temp), year = 1995:2025))
 ```
 
-Not sure why I omitted 2026, but that how she goes sometimes.
+Not sure why I omitted 2026, but that's how she goes sometimes.
 
 ### Graphing and Modeling
 
@@ -37,7 +39,7 @@ x %>%
 
 Clearly there is an upwards trend:
 
-```{r}
+```{r error=TRUE}
 x %>%
   ggplot(aes(year, temp)) +
   geom_line() +
