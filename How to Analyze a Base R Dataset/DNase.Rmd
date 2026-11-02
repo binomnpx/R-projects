@@ -1,0 +1,637 @@
+---
+title: "How to Analyze a Base R Dataset"
+output:
+  html_document:
+    df_print: paged
+---
+
+### Gather Data
+
+A base R dataset will be used to demonstrate data exploration, statistical modeling, programming, analysis, and discussion.
+
+```{r message=FALSE, warning=FALSE}
+
+options(paged.print = T)
+
+library(tidyverse)
+
+data()
+
+# DNase
+
+```
+
+
+The chosen dataset `DNase` comes from base R.
+
+The dataset is from an experiment involving an ELISA assay. It seems researchers designed this experiment to assess the ELISA assay's performance at different levels of substrate.
+
+
+```{r message=FALSE, warning=FALSE}
+
+DNase <- as_tibble(DNase)
+
+rmarkdown::paged_table(DNase)
+
+```
+
+```{r}
+
+?DNase
+
+```
+
+
+##### Description
+
+> The DNase data frame has 176 rows and 3 columns of data obtained during development of an ELISA assay for the recombinant protein DNase in rat serum.
+
+##### Format
+
+> An object of class c("nfnGroupedData", "nfGroupedData", "groupedData", "data.frame") containing the following columns:
+
+`Run`
+
+> an ordered factor with levels 10 < ... < 3 indicating the assay run.
+
+`conc`
+
+> a numeric vector giving the known concentration of the protein.
+
+`density`
+
+> a numeric vector giving the measured optical density (dimensionless) in the assay. Duplicate optical density measurements were obtained.
+
+
+### Explore
+
+(IMPORTANT FOR THE READER: As I wrote this R notebook, I did not fully understand the meaning of `Run` or the intention behind the experiment and the creation of the data. Up until the end of this **Explore** section, I was under the impression that this was an experiment where rats were given various levels of some treatment, and some related biomarker was measured. Take this as an opportunity to observe how an analyst works within an incomplete understanding of the scientific context.)
+
+```{r}
+
+summary(DNase)
+
+```
+
+* `Run` contains IDs for each run.
+
+* `conc` has mean not equal to median. Its mean is closer to 3rd quartile, suggesting a heavy skew.
+
+* `density` has a mean close to the median relative to the 1st and 3rd quartiles, suggesting a symmetric distribution.
+
+
+```{r}
+
+hist(DNase$conc, breaks = "fd")
+
+```
+
+`conc` resembles data that varies systematically rather than randomly. Many values in the data are identical, probably preselected for this experiment.
+
+```{r}
+
+hist(DNase$density, breaks = "fd")
+
+```
+
+
+`density` seems to vary both systematically and randomly. See how the distribution contains one really tall column near zero, and then a rich sample of values across the rest of the data range.
+
+
+```{r}
+
+count(DNase, conc)
+
+```
+
+
+The above claim regarding hand-picked values for `conc` seems to be correct.
+
+```{r}
+
+DNase %>%
+  arrange(density) %>%
+  count(density)
+
+```
+
+
+The systematic trend in `density` is not as obvious as it is in `conc`.
+
+Let's see if `Run` explains the tall left bar in the `density` histogram:
+
+```{r message=FALSE, warning=FALSE}
+
+DNase %>%
+  mutate(Run = factor(Run, levels = 1:11)) %>% # forces the Runs to be in proper order
+  ggplot(aes(density)) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~Run) +
+  ggtitle("`density` Histograms by `Run`")
+
+```
+
+
+`Run` does not appear to explain the tall left bar in `density`.
+
+I expected `Run` and `conc` to have a one-to-one correspondence, as though the tall left bar in `density` belonged to some sort of "control" `Run` with zero `conc`. If that were the case, `Run` would be more akin to an ID for `conc`.
+
+Let's see how `Run` and `conc` correspond:
+
+
+
+```{r}
+
+DNase %>%
+  count(Run, conc)
+
+```
+
+
+
+Each `Run` contains two instances of each value of `conc`, rather than each `Run` containing only one value of `conc`.
+
+So, `Run` is not an ID for `conc`. Let's see if `conc` explains `density`:
+
+```{r}
+
+DNase %>%
+  mutate(conc = factor(conc)) %>%
+  ggplot(aes(density)) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~conc) +
+  ggtitle("`density` Histograms by `conc`")
+
+```
+
+I'm gathering a pattern...
+
+```{r}
+
+DNase %>%
+  mutate(conc = factor(conc)) %>%
+  ggplot(aes(density)) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~conc, ncol = 1) +
+  ggtitle("`density` Histograms by `conc`")
+
+```
+
+It appears that as `conc` increases, `density` increases, but at an accelerating rate. Values of `density` associated with lower `conc` thus appear as one homogeneous group in the marginal `density` histogram.
+
+There's a catch though, and I did not realize this right away. This "accelerating" relationship may be due to the `conc` values not falling neatly on a linear scale. That is, evenly spaced.
+
+We can evaluate the scale of `conc` as well as the relationship between `conc` and `density` in a single graph:
+
+```{r}
+
+DNase %>%
+  ggplot(aes(conc, density)) +
+  geom_point()
+
+```
+
+It is clear that values of `conc` are not evenly spaced. And the above graph more accurately portrays the non-linear relationship in the data.
+
+Notably, the variance in `density` seems to grow alongside `conc` as well.
+
+### Data Modeling
+
+(DISCLAIMER: No test set was made available. All available data were expended in the exploration phase of the analysis. The same data will be used to test every following hypothesis about the data. This is a misuse of statistics, but this document is primarily intended for demonstration purposes.)
+
+Now that systematic relationships between the study variables have been assessed, proper statistical modeling can take place.
+
+The main purpose of the fitted models will be to to uncover a formula for predicting `conc` based on `density`, as I believe that is the machine's purpose. Additionally, the machine's measurement error can be estimated and outlier behavior or deviance from the norm can be identified.
+
+Unfortunately, the units for `conc` and `density` were not given in the data description. Knowing their units would help choose potential data transformations that would appropriately control both the non-linear relationship and possibly the non-constant variance in `density`.
+
+Let's reexamine the scatterplot, but this time it is oriented according to `conc` versus `density`:
+
+```{r}
+
+DNase %>%
+  ggplot(aes(density, conc)) +
+  geom_point() +
+  ggtitle("conc vs density")
+
+```
+
+Add a loess smoother:
+
+```{r}
+
+DNase %>%
+  ggplot(aes(density, conc)) +
+  geom_point() +
+  geom_smooth(method = "loess", se = F) +
+  ggtitle("loess fit")
+
+```
+The relationship remains non-linear and suggests a quadratic or exponential trend.
+
+Let's fit a polynomial of the form $y \sim x + x^2$ and examine the residuals (omitting a parameter for intercept since that would clearly equal zero):
+
+```{r}
+
+mod_poly2 <- lm(conc ~ -1 + density + density^2, data = DNase)
+
+tibble(
+    density = DNase$density,
+    residuals = resid(mod_poly2)
+  ) %>%
+  ggplot(aes(density, residuals)) +
+  modelr::geom_ref_line(h = 0) +
+  geom_point() +
+  ggtitle("Quadratic residuals")
+
+```
+
+That looks pretty terrible. Even if we remove the data corresponding to the highest concentration, I doubt this would be the correct model specification:
+
+```{r}
+
+highest_removed <- DNase %>%
+  filter(conc != max(conc))
+
+mod_poly2 <- lm(conc ~ -1 + density + density^2, data = highest_removed)
+
+tibble(
+    density = highest_removed$density,
+    residuals = resid(mod_poly2)
+  ) %>%
+  ggplot(aes(density, residuals)) +
+  modelr::geom_ref_line(h = 0) +
+  geom_point() +
+  ggtitle('"No outliers" residuals')
+
+```
+
+We get the same pattern. So the lack of fit is not merely due to outlier behavior.
+
+Maybe a polynomial of degree 3 will produce a more sensible fit:
+
+```{r}
+
+mod_poly3 <- lm(conc ~ -1 + density + density^2 + density^3, data = DNase)
+
+tibble(
+    density = DNase$density,
+    residuals = resid(mod_poly3)
+  ) %>%
+  ggplot(aes(density, residuals)) +
+  modelr::geom_ref_line(h = 0) +
+  geom_point() +
+  ggtitle("Cubic residuals")
+
+```
+No difference.
+
+Well, lower concentrations are overft, and higher concentrations are underfit. Maybe an exponential relationship would fit better:
+
+```{r}
+
+mod_exp <- lm(conc ~ -1 + exp(density), data = DNase)
+
+tibble(
+    density = DNase$density,
+    residuals = resid(mod_exp)
+  ) %>%
+  ggplot(aes(density, residuals)) +
+  modelr::geom_ref_line(h = 0) +
+  geom_point() +
+  ggtitle("Exponential residuals")
+
+```
+
+These residuals at least appear monotonic (only increasing across their range). However, there is still non-linearity present.
+
+There is one more model to try before resorting to more numerical-blackbox methods.
+
+Ordinary Least Squares (OLS) with the following transformation:
+
+> sqrt(conc) ~ sqrt(sqrt(density))
+
+The idea is that square rooting the response `conc` will address the non-linear relationship, and square rooting the covariate `density` will "stabilize" the variance. The additional sqrt() was found through trial and error and happened to produce a seemingly linear relationship.
+
+```{r}
+
+DNase %>%
+  mutate(
+    density_sq = sqrt(density),
+    conc_sqsq = sqrt(sqrt(conc))
+  ) %>%
+  ggplot(aes(density_sq, conc_sqsq)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  labs(x = "sqrt(density)", y = "sqrt(sqrt(conc))") +
+  ggtitle("sqrt-sqrt^2 transformations")
+
+```
+
+Fitting OLS to these transformed variables produces the following residuals:
+
+```{r}
+
+DNase_sq_sqsq <- DNase %>%
+  mutate(
+    density_sq = sqrt(density),
+    conc_sqsq = sqrt(sqrt(conc))
+  )
+
+mod_sq_sqsq <- lm(conc_sqsq ~ -1 + density_sq, data = DNase_sq_sqsq)
+
+tibble(
+    density_sq = DNase_sq_sqsq$density_sq,
+    residuals = resid(mod_sq_sqsq)
+  ) %>%
+  ggplot(aes(density_sq, residuals)) +
+  modelr::geom_ref_line(h = 0) +
+  geom_point() +
+  ggtitle("sqrt-sqrt^2 residuals")
+
+```
+
+This is a good stopping point for OLS. The hope was to find an insightful algebraic relationship between `conc` and `density`. Without understanding ELISA theory and a target equation, OLS loses its usefulness. This isn't to say that a more broad search among algebraic expressions and non-linear transformations isn't possible with OLS alone, but an analyst should first seek guidance from a domain expert before blindly guessing.
+
+### Beyond OLS
+
+For completions sake, and to produce a residual plot that says "Nice find!", rather than "Keep tryin' bud!", we will choose a more flexible model. This will accomplish the previous modeling goals (and additionally would have been a decent baseline to compare with for the "algebraic" OLS model that we could not find).
+
+Why not cross-validate some splines?
+
+That is:
+
+* fit $k$ splines
+* choose the optimal $k$ using cross-validation
+
+First, we need to set up the data for cross-validation. We should do this to account for spline models' tendency to overfit to noise in their training data.
+
+The data contains:
+
+* 8 `conc` levels
+* 22 data instances in each `conc` level
+
+Cross-validation rules:
+
+1. Divide data into 4 "folds." That is, among `conc` levels, cut the 22 instances into 4 equal folds. Remaining data goes in the last fold cut.
+2. Use 3 folds to train a model with $k$ splines.
+3. Use the remaining fold to calculate MSE (mean squared error).
+4. Estimate test MSE by averaging the 4 MSE's calculated.
+
+Do this for each level of $k$ in [1,10], and select $k$ with lowest average test MSE.
+
+```{r}
+
+set.seed(10082026)
+
+folds <- DNase %>%
+  select(-Run) %>%
+  arrange(conc) %>%
+  group_by(conc) %>%
+  sample_n(22) %>% # randomize within conc
+  mutate(fold = c(rep(1:4, 5), 1:2)) %>% # label folds
+  ungroup()
+  
+folds
+
+```
+
+Let's check to see if the data were folded appropriately.
+
+```{r}
+
+folds %>%
+  ggplot(aes(density, conc)) +
+  geom_point() +
+  facet_wrap(~fold, nrow = 2) +
+  ggtitle("(conc ~ density) by fold")
+
+```
+
+All look appropriate as test data. Now we set up the modeling code.
+
+Let's see if we can fit a model with 10 knots, equally spaced across `density`'s range:
+
+```{r}
+
+mod <- lm(conc ~ -1 + splines::ns(density, df = 11), data = DNase)
+
+# splines::ns vignette says to do this:
+
+mod_knots <- attr(terms(mod), "predvars")
+
+
+# which returns a "call":
+
+mod_knots
+class(mod_knots)
+
+```
+
+That is hard to read. I just want to make sure I specified `df` correctly.
+
+```{r}
+
+mod_knots <- as.character(mod_knots)
+
+mod_knots <- mod_knots[3]
+
+# extract the "knots" argument of the call
+
+mod_knots %>%
+  str_extract("c\\(.+?\\)")
+
+```
+
+We can evaluate the string as if it were code to properly run `length()` on it:
+
+```{r}
+
+mod_knots %>%
+  str_extract("c\\(.+?\\)") %>%
+  parse(text = .) %>%
+  eval() %>%
+  length()
+
+```
+
+We have ten knots! Now let's see what the model output should look like before we cross-validate for the optimal number of knots:
+
+```{r}
+
+# mod <- lm(conc ~ -1 + splines::ns(density, df = 11), data = DNase)
+
+tibble(
+    density = DNase$density,
+    residuals = resid(mod)
+  ) %>%
+  ggplot(aes(density, residuals)) +
+  modelr::geom_ref_line(h = 0) +
+  geom_point() +
+  ggtitle("Cubic splines residuals (#knots = 10)")
+
+mod_output <- tibble(density = modelr::seq_range(DNase$density, n = 100)) %>%
+  mutate(conc = predict(mod, newdata = tibble(density = density)))
+
+mod_knots <- attr(terms(mod), "predvars") %>%
+  as.character() %>%
+  .[3] %>%
+  str_extract("c\\(.+?\\)") %>%
+  parse(text = .) %>%
+  eval()
+
+mod_knots <- tibble(density = mod_knots, conc = predict(mod, newdata = tibble(density = mod_knots)))
+
+DNase %>%
+  ggplot(aes(density, conc)) +
+  geom_point(data = mod_knots, shape = 4, color = "orange", stroke = 2) +
+  geom_point() +
+  geom_line(data = mod_output, color = "blue") +
+  ggtitle("Cubic splines fit (#knots = 10)")
+
+```
+
+Looks like the code works. Let's optimize for best number of knots $k$ according to the following procedure:
+
+1) Fix one of $k$ in [1, 10].
+2) Train a cubic splines model on 3 out of 4 folds and use the remaining test fold to calculate test MSE.
+3) Repeat model training and test MSE calculation for each combination of folds.
+4) Average all of the test MSE's to obtain the cross-validated test MSE.
+5) Repeat for all $k$ in [1, 10].
+6) Select optimal $k$ as the model with lowest cross-validated test MSE.
+
+
+```{r}
+
+formulas <- paste0("conc ~ -1 + splines::ns(density, df = ", 2:11, ")")
+
+
+# set.seed(10082026)
+# 
+# folds <- DNase %>%
+#   select(-Run) %>%
+#   arrange(conc) %>%
+#   group_by(conc) %>%
+#   sample_n(22) %>% # randomize within conc
+#   mutate(fold = c(rep(1:4, 5), 1:2)) # label folds
+
+
+cv_MSE <- function(formula){
+  
+  MSE <<- numeric()
+  
+  for(i in 1:4){
+    
+    mod <<- folds %>%
+      filter(fold != i) %>%
+      lm(formula, data = .)
+    
+    MSE[i] <- folds %>%
+      filter(fold == 1) %>%
+      mutate(
+        pred = predict(mod, newdata = tibble(density)),
+        error = conc - pred
+      ) %>%
+      summarise(MSE = mean(error^2)) %>%
+      pull(MSE)
+      
+  }
+  
+  return(mean(MSE))
+  
+}
+
+cv_MSE_output <- map_dbl(formulas, cv_MSE)
+
+cv_MSE_output
+
+```
+
+The procedure ran without error. Let's examine the cross-validated MSE's!
+
+```{r}
+
+tibble(knots = factor(1:10), test_MSE = cv_MSE_output) %>%
+  ggplot(aes(knots, test_MSE)) +
+  geom_col()
+
+
+```
+
+Interestingly, $k = 3$ has less error than its neighbors. My intuition tells me that this is caused by there being a lower number of folds available than we would like. The above MSE's are estimates after all, so a small deviation like this isn't a cause for concern.
+
+There is a stark drop in test MSE once we reach 8 knots. This aligns with the number of distinct `conc` in the experiment.
+
+To give credit to simpler models (less than 8 knots), $k = 2$ performs almost as well as knots 3 through 7. So maybe 2 knots is worth checking out as well:
+
+```{r}
+
+mod <- lm(conc ~ -1 + splines::ns(density, df = 3), data = DNase)
+
+tibble(
+    density = DNase$density,
+    residuals = resid(mod)
+  ) %>%
+  ggplot(aes(density, residuals)) +
+  modelr::geom_ref_line(h = 0) +
+  geom_point() +
+  ggtitle("Cubic splines residuals (#knots = 2)")
+
+mod_output <- tibble(density = modelr::seq_range(DNase$density, n = 100)) %>%
+  mutate(conc = predict(mod, newdata = tibble(density = density)))
+
+mod_knots <- attr(terms(mod), "predvars") %>%
+  as.character() %>%
+  .[3] %>%
+  str_extract("c\\(.+?\\)") %>%
+  parse(text = .) %>%
+  eval()
+
+mod_knots <- tibble(density = mod_knots, conc = predict(mod, newdata = tibble(density = mod_knots)))
+
+DNase %>%
+  ggplot(aes(density, conc)) +
+  geom_point() +
+  geom_line(data = mod_output, color = "blue") +
+  geom_point(data = mod_knots, shape = 4, color = "orange", stroke = 2) +
+  ggtitle("Cubic splines fit (#knots = 2)")
+
+```
+
+```{r}
+
+mod <- lm(conc ~ -1 + splines::ns(density, df = 9), data = DNase)
+
+tibble(
+    density = DNase$density,
+    residuals = resid(mod)
+  ) %>%
+  ggplot(aes(density, residuals)) +
+  modelr::geom_ref_line(h = 0) +
+  geom_point() +
+  ggtitle("Cubic splines residuals (#knots = 8)")
+
+mod_output <- tibble(density = modelr::seq_range(DNase$density, n = 100)) %>%
+  mutate(conc = predict(mod, newdata = tibble(density = density)))
+
+mod_knots <- attr(terms(mod), "predvars") %>%
+  as.character() %>%
+  .[3] %>%
+  str_extract("c\\(.+?\\)") %>%
+  parse(text = .) %>%
+  eval()
+
+mod_knots <- tibble(density = mod_knots, conc = predict(mod, newdata = tibble(density = mod_knots)))
+
+DNase %>%
+  ggplot(aes(density, conc)) +
+  geom_point() +
+  geom_line(data = mod_output, color = "blue") +
+  geom_point(data = mod_knots, shape = 4, color = "orange", stroke = 2) +
+  ggtitle("Cubic splines fit (#knots = 8)")
+
+```
+
+I am happy to report that two models ($k$ = {2, 8}) capable of "striking through" each strata of `conc` was fit. However, it does not elucidate any anomalous behavior in the ELISA assay.
+
+Even though higher levels of `conc` have greater variance in their residuals, this does not necessarily mean the assay is performing "worse" at higher levels of `conc`. Clearly `density` increases with `conc`, and naturally variance might too. Without a proper transformation of the data, stemming from a theoretical understanding of the link between `conc` and `density`, these results alone cannot determine this.
