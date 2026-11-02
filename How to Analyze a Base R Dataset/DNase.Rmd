@@ -1,8 +1,6 @@
 ---
 title: "How to Analyze a Base R Dataset"
-output:
-  html_document:
-    df_print: paged
+output: html_notebook
 ---
 
 ### Gather Data
