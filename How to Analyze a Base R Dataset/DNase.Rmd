@@ -1,6 +1,9 @@
 ---
 title: "How to Analyze a Base R Dataset"
-output: html_notebook
+output:
+  html_notebook:
+    theme: darkly
+    highlight: default
 ---
 
 ### Gather Data

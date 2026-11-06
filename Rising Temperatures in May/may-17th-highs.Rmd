@@ -1,9 +1,9 @@
 ---
 title: "Rising Temperatures in May"
-output:
-  pdf_document: default
-  html_document:
-    df_print: paged
+output: 
+  html_notebook:
+    theme: darkly
+    highlight: default
 ---
 
 ```{r include=FALSE}
